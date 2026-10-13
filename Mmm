@@ -1,0 +1,254 @@
+
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>مكسر الصوت | ليث</title>
+
+<style>
+body {
+  margin: 0;
+  padding: 20px;
+  background: #35204f;
+  color: white;
+  font-family: Arial, sans-serif;
+}
+h1, footer { text-align: center; }
+.panel {
+  background: #171c24;
+  border-radius: 12px;
+  padding: 20px;
+  margin: 18px auto;
+  max-width: 650px;
+  box-shadow: 0 5px 20px #0005;
+}
+.control { margin: 25px 0; }
+.top {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+.value { color: #8291ff; }
+input[type=range] {
+  width: 100%;
+  accent-color: #8291ff;
+  direction: ltr;
+}
+button {
+  background: #6879f5;
+  color: white;
+  border: 0;
+  border-radius: 8px;
+  padding: 12px 18px;
+  margin: 5px;
+  font-size: 16px;
+}
+button:disabled { opacity: .5; }
+footer { color: #ccc; margin-top: 30px; }
+#status { color: #b8c0ff; line-height: 1.7; }
+</style>
+</head>
+
+<body>
+<h1>🎚️ مكسر الصوت</h1>
+<p style="text-align:center">تم تطويره من قبل ليث</p>
+
+<div class="panel">
+  <h3>تعليه صوت المايك</h3>
+  <div class="control">
+    <div class="top">
+      <label>مستوى الصوت</label>
+      <span class="value" id="gainVal">150%</span>
+    </div>
+    <input id="gain" type="range"
+      min="0" max="300" value="150">
+  </div>
+
+  <h3>تعليه الصدى</h3>
+  <div class="control">
+    <div class="top">
+      <label>قوة الصدى Echo</label>
+      <span class="value" id="echoVal">60%</span>
+    </div>
+    <input id="echo" type="range"
+      min="0" max="100" value="60">
+  </div>
+
+  <div class="control">
+    <div class="top">
+      <label>تكرار الصدى</label>
+      <span class="value" id="repeatVal">45%</span>
+    </div>
+    <input id="repeat" type="range"
+      min="0" max="85" value="45">
+  </div>
+
+  <div class="control">
+    <div class="top">
+      <label>الرنين Reverb</label>
+      <span class="value" id="reverbVal">40%</span>
+    </div>
+    <input id="reverb" type="range"
+      min="0" max="100" value="40">
+  </div>
+
+  <div class="control">
+    <div class="top">
+      <label>زمن الصدى</label>
+      <span class="value" id="delayVal">300 ms</span>
+    </div>
+    <input id="delay" type="range"
+      min="50" max="900" value="300">
+  </div>
+
+  <p>
+    <label>
+      <input type="checkbox" id="monitor">
+      سماع الصوت مباشرة
+    </label>
+  </p>
+
+  <button id="start">تشغيل المايك</button>
+  <button id="stop" disabled>إيقاف</button>
+  <p id="status">اضغط تشغيل واسمح باستخدام المايكروفون.</p>
+</div>
+
+<footer>© تم تطويره من قبل ليث</footer>
+
+<script>
+const $ = id => document.getElementById(id);
+
+let ctx, stream, source, amp, delay, feedback;
+let dry, wet, output, convolver, reverbGain;
+
+function show(id, value) {
+  $(id + "Val").textContent =
+    value + (id === "delay" ? " ms" : "%");
+}
+
+["gain", "echo", "repeat", "reverb", "delay"]
+.forEach(id => {
+  $(id).addEventListener("input", () => {
+    show(id, $(id).value);
+    update();
+  });
+});
+
+function makeImpulse() {
+  const length = ctx.sampleRate * 3;
+  const buffer = ctx.createBuffer(2, length, ctx.sampleRate);
+
+  for (let c = 0; c < 2; c++) {
+    const data = buffer.getChannelData(c);
+    for (let i = 0; i < length; i++) {
+      data[i] = (Math.random() * 2 - 1) *
+        Math.pow(1 - i / length, 2.5);
+    }
+  }
+  return buffer;
+}
+
+function update() {
+  if (!ctx) return;
+
+  const now = ctx.currentTime;
+  const echo = Number($("echo").value) / 100;
+
+  amp.gain.setTargetAtTime(
+    Number($("gain").value) / 100, now, 0.03
+  );
+
+  delay.delayTime.setTargetAtTime(
+    Number($("delay").value) / 1000, now, 0.03
+  );
+
+  feedback.gain.setTargetAtTime(
+    Number($("repeat").value) / 100, now, 0.03
+  );
+
+  wet.gain.setTargetAtTime(echo, now, 0.03);
+  dry.gain.setTargetAtTime(1 - echo * 0.5, now, 0.03);
+
+  reverbGain.gain.setTargetAtTime(
+    Number($("reverb").value) / 100, now, 0.03
+  );
+
+  output.gain.setTargetAtTime(
+    $("monitor").checked ? 0.8 : 0, now, 0.03
+  );
+}
+
+async function start() {
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false
+      }
+    });
+
+    ctx = new (window.AudioContext ||
+      window.webkitAudioContext)();
+
+    await ctx.resume();
+
+    source = ctx.createMediaStreamSource(stream);
+    amp = ctx.createGain();
+    delay = ctx.createDelay(1);
+    feedback = ctx.createGain();
+    dry = ctx.createGain();
+    wet = ctx.createGain();
+    output = ctx.createGain();
+    convolver = ctx.createConvolver();
+    reverbGain = ctx.createGain();
+
+    convolver.buffer = makeImpulse();
+
+    source.connect(amp);
+
+    amp.connect(dry);
+    dry.connect(output);
+
+    amp.connect(delay);
+    delay.connect(feedback);
+    feedback.connect(delay);
+    delay.connect(wet);
+    wet.connect(output);
+
+    amp.connect(convolver);
+    convolver.connect(reverbGain);
+    reverbGain.connect(output);
+
+    output.connect(ctx.destination);
+
+    update();
+
+    $("start").disabled = true;
+    $("stop").disabled = false;
+    $("status").textContent =
+      "الميكروفون يعمل. استخدم سماعات حتى تتجنب الصفير.";
+  } catch (error) {
+    $("status").textContent =
+      "تعذر تشغيل المايك: " + error.message +
+      ". افتح الموقع عبر HTTPS واسمح بصلاحية المايك.";
+  }
+}
+
+function stop() {
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  if (ctx) ctx.close();
+
+  ctx = stream = null;
+  $("start").disabled = false;
+  $("stop").disabled = true;
+  $("status").textContent = "تم إيقاف الصوت.";
+}
+
+$("start").onclick = start;
+$("stop").onclick = stop;
+$("monitor").onchange = update;
+</script>
+</body>
+</html>
